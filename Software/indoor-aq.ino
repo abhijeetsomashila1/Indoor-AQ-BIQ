@@ -19,7 +19,7 @@ const char* TOKEN =
 
 const char* CO2_FIELD = "co\xE2\x82\x82";
 
-const unsigned long SAMPLE_INTERVAL = 10UL * 60UL * 1000UL;
+const unsigned long SAMPLE_INTERVAL = 5UL * 1000UL;
 
 // =====================================================
 // PINS
@@ -269,14 +269,13 @@ void postData(
 
   DynamicJsonDocument jsonDoc(512);
 
-  JsonArray con = jsonDoc.createNestedArray("con");
-  con.add(noise);
-  con.add(aqi);
-  con.add(pm10);
-  con.add(pm25);
-  con.add(temperature);
-  con.add(co2);
-  con.add(humidity);
+  jsonDoc["noise"] = noise;
+  jsonDoc["aqi"] = aqi;
+  jsonDoc["pm10"] = pm10;
+  jsonDoc["pm2.5"] = pm25;
+  jsonDoc["temperature"] = temperature;
+  jsonDoc[CO2_FIELD] = co2;
+  jsonDoc["humidity"] = humidity;
 
   String requestBody;
 
