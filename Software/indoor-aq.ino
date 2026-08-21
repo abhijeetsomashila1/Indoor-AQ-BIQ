@@ -8,14 +8,14 @@
 // WIFI
 // =====================================================
 
-const char* ssid = "SCRC-WIFI";
-const char* password = "SCRC@IIITH";
+const char* ssid = "Wifi name";
+const char* password = "Wifi password";
 
 const char* API_URL =
 "https://dev-ctop.iiit.ac.in/api/nodes/create-cin/16";
 
 const char* TOKEN =
-"cab2ddd427101e6e551f6727885fe13a";
+"bearer token";
 
 const char* CO2_FIELD = "co\xE2\x82\x82";
 
