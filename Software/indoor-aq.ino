@@ -269,13 +269,14 @@ void postData(
 
   DynamicJsonDocument jsonDoc(512);
 
-  jsonDoc["temperature"] = temperature;
-  jsonDoc["pm2.5"] = pm25;
-  jsonDoc["pm10"] = pm10;
-  jsonDoc[CO2_FIELD] = co2;
-  jsonDoc["noise"] = noise;
-  jsonDoc["humidity"] = humidity;
-  jsonDoc["aqi"] = aqi;
+  JsonArray con = jsonDoc.createNestedArray("con");
+  con.add(noise);
+  con.add(aqi);
+  con.add(pm10);
+  con.add(pm25);
+  con.add(temperature);
+  con.add(co2);
+  con.add(humidity);
 
   String requestBody;
 
