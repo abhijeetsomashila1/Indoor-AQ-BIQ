@@ -12,7 +12,7 @@ const char* ssid = "Wifi name";
 const char* password = "Wifi password";
 
 const char* API_URL =
-"https://dev-ctop.iiit.ac.in/api/nodes/create-cin/16";
+"api url";
 
 const char* TOKEN =
 "bearer token";
