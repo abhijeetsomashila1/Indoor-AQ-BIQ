@@ -8,14 +8,21 @@
 // WIFI
 // =====================================================
 
-const char* ssid = "SCRC-WIFI";
-const char* password = "SCRC@IIITH";
+const char* ssid = "Wifi name";
+const char* password = "Wifi password";
 
 const char* API_URL =
+<<<<<<< HEAD:Software/indoor-aq-r4.ino
 "https://dev-ctop.iiit.ac.in/api/nodes/create-cin/15";
 
 const char* TOKEN =
 "2f5d786104198a54f5016ce12286dc96";
+=======
+"api url";
+
+const char* TOKEN =
+"bearer token";
+>>>>>>> b11f7af47ea0e2bef44e7ed97fcff0fadf5861ac:Software/indoor-aq.ino
 
 const char* CO2_FIELD = "co\xE2\x82\x82";
 
