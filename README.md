@@ -30,7 +30,7 @@ The Arduino sketch is located at [`Software/indoor-aq.ino`](Software/indoor-aq.i
 
 1. `setup()` starts the serial monitor at 115200 baud, connects to Wi-Fi, and
 	 initializes the AHT10, SDS011 serial port, CO2 input, and noise ADC.
-2. `loop()` samples the sensors every 5 seconds.
+2. `loop()` samples the sensors every 10 minutes.
 3. The SDS011 frame is validated with its checksum before updating PM2.5 and
 	 PM10 values.
 4. AQI is calculated from PM2.5 using the US EPA-style breakpoint table. AQI is

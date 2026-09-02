@@ -12,14 +12,14 @@ const char* ssid = "SCRC-WIFI";
 const char* password = "SCRC@IIITH";
 
 const char* API_URL =
-"https://dev-ctop.iiit.ac.in/api/nodes/create-cin/16";
+"https://dev-ctop.iiit.ac.in/api/nodes/create-cin/15";
 
 const char* TOKEN =
-"cab2ddd427101e6e551f6727885fe13a";
+"2f5d786104198a54f5016ce12286dc96";
 
 const char* CO2_FIELD = "co\xE2\x82\x82";
 
-const unsigned long SAMPLE_INTERVAL = 5UL * 1000UL;
+const unsigned long SAMPLE_INTERVAL = 10UL * 60UL * 1000UL;
 
 // =====================================================
 // PINS
@@ -190,11 +190,11 @@ void loop()
     Serial.print("AQI         : ");
     Serial.println(aqi);
 
-    if (aqi >= 0)
-    {
-      Serial.print("Category    : ");
-      Serial.println(getAQICategory(aqi));
-    }
+    // if (aqi >= 0)
+    // {
+    //   Serial.print("Category    : ");
+    //   Serial.println(getAQICategory(aqi));
+    // }
 
     Serial.println("================================");
 
