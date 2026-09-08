@@ -12,8 +12,9 @@
 // =====================================================
 #define AHT_SDA       22
 #define AHT_SCL       21
-#define SDS_RX        17
-#define SDS_TX        16
+// Prana Air UART mapping from the working legacy implementation: ESP32 RX is GPIO16 and TX is GPIO17.
+#define SDS_RX        16
+#define SDS_TX        17
 #define CO2_PWM_PIN   27
 #define NOISE_PIN     34
 #define BUTTON_PIN    0            // Boot button (active LOW)
@@ -90,7 +91,12 @@ void initSensors();
 void readAHT10();
 void readNoise();
 int  readCO2PWM();
-bool readSDS011();
+// Use the Prana Air command protocol instead of the SDS011 passive frame protocol.
+// Declare the Prana Air protocol helpers before they are used during sensor setup.
+void send_command(byte cmd);
+bool checksum();
+void PM_setup();
+bool readPranaPM();
 int  calculateAQI(float pm25);
 String getAQICategory(int aqi);
 void postData(float temp, float hum, float pm25, float pm10, int co2, float noise, int aqi);
@@ -106,7 +112,8 @@ void initSensors() {
   } else {
     Serial.println("AHT10 NOT DETECTED");
   }
-  sdsSerial.begin(9600, SERIAL_8N1, SDS_RX, SDS_TX);
+  // Initialize the Prana Air PM sensor and send its startup command.
+  PM_setup();
   pinMode(CO2_PWM_PIN, INPUT);
   analogReadResolution(12);
   analogSetPinAttenuation(NOISE_PIN, ADC_11db);
@@ -206,7 +213,8 @@ void loop() {
       lastDebugPrint = millis();
       // Read sensors to get latest values
       if (ahtOk) readAHT10();
-      readSDS011();
+      // Read particulate matter using the Prana Air command/response protocol.
+      readPranaPM();
       readNoise();
       co2ppm = readCO2PWM();
       printSensorSummary("[DEBUG]");
@@ -218,7 +226,8 @@ void loop() {
 
       // Read sensors (already read by debug, but we re‑read to ensure fresh data)
       if (ahtOk) readAHT10();
-      readSDS011();
+      // Read particulate matter using the Prana Air command/response protocol.
+      readPranaPM();
       readNoise();
       co2ppm = readCO2PWM();
 
@@ -517,30 +526,85 @@ int readCO2PWM() {
   return (int)(5000.0f * (highMs - 2.0f) / 1000.0f);
 }
 
-bool readSDS011() {
-  unsigned long startTime = millis();
-  while (sdsSerial.available() < 1) {
-    if (millis() - startTime > 500) return false;
+// Prana Air PM sensor command frame and most recently received 9-byte response.
+byte command_frame[9] = {0xAA, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x67, 0xBB};
+byte received_data[9];
+int response_sum = 0;
+
+// Build and send a Prana Air command, recalculating its two-byte checksum.
+void send_command(byte cmd) {
+  command_frame[1] = cmd;
+  int command_sum = command_frame[0] + command_frame[1] + command_frame[2] +
+                    command_frame[3] + command_frame[4] + command_frame[5] +
+                    command_frame[8];
+  int remainder = command_sum % 256;
+  command_frame[6] = (command_sum - remainder) / 256;
+  command_frame[7] = remainder;
+  sdsSerial.write(command_frame, sizeof(command_frame));
+  sdsSerial.flush();
+}
+
+// Validate the Prana Air response checksum against response bytes 6 and 7.
+bool checksum() {
+  response_sum = received_data[0] + received_data[1] + received_data[2] +
+                 received_data[3] + received_data[4] + received_data[5] +
+                 received_data[8];
+  return response_sum == (received_data[6] * 256 + received_data[7]);
+}
+
+// Start the PM sensor UART with the required timeout and issue its startup command.
+void PM_setup() {
+  sdsSerial.begin(9600, SERIAL_8N1, SDS_RX, SDS_TX);
+  sdsSerial.setTimeout(250);
+  send_command(0x01);
+}
+
+// Request and parse one Prana Air PM response, updating the existing PM values.
+bool readPranaPM() {
+  // Discard any response left in the UART buffer by the startup command or a failed read.
+  while (sdsSerial.available() > 0) {
+    sdsSerial.read();
   }
-  if (sdsSerial.read() != 0xAA) {
-    while (sdsSerial.available()) sdsSerial.read();
+
+  // Request the current PM2.5 and PM10 values from the Prana Air sensor.
+  send_command(0x02);
+
+  // Allow the sensor time to construct and transmit its 9-byte response.
+  delay(100);
+
+  // Search for the response header so a partial or misaligned previous frame cannot corrupt parsing.
+  unsigned long waitStart = millis();
+  bool headerFound = false;
+  while (millis() - waitStart < 250) {
+    if (sdsSerial.available() > 0) {
+      if (sdsSerial.read() == 0xAA) {
+        headerFound = true;
+        break;
+      }
+    } else {
+      delay(1);
+    }
+  }
+  if (!headerFound) {
+    Serial.println("PM sensor timeout");
     return false;
   }
-  uint8_t buf[10];
-  buf[0] = 0xAA;
-  for (int i = 1; i < 10; i++) {
-    unsigned long byteStart = millis();
-    while (!sdsSerial.available()) {
-      if (millis() - byteStart > 100) return false;
-    }
-    buf[i] = sdsSerial.read();
+
+  received_data[0] = 0xAA;
+  if (sdsSerial.readBytes(&received_data[1], sizeof(received_data) - 1) != sizeof(received_data) - 1) {
+    Serial.println("PM sensor timeout");
+    return false;
   }
-  if (buf[1] != 0xC0) return false;
-  uint8_t checksum = 0;
-  for (int i = 2; i <= 7; i++) checksum += buf[i];
-  if (checksum != buf[8]) return false;
-  pm25 = (((uint16_t)buf[3] << 8) | buf[2]) / 10.0f;
-  pm10 = (((uint16_t)buf[5] << 8) | buf[4]) / 10.0f;
+
+  if (received_data[0] != 0xAA || received_data[8] != 0xBB || !checksum()) {
+    Serial.printf("PM sensor invalid frame: header=0x%02X tail=0x%02X\n",
+                  received_data[0], received_data[8]);
+    return false;
+  }
+
+  // Prana Air sends PM10 in bytes 2-3 and PM2.5 in bytes 4-5, high byte first.
+  pm25 = received_data[4] * 256 + received_data[5];
+  pm10 = received_data[2] * 256 + received_data[3];
   return true;
 }
 
