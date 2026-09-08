@@ -8,14 +8,21 @@
 // WIFI
 // =====================================================
 
-const char* ssid = "SCRC-WIFI";
-const char* password = "SCRC@IIITH";
+const char* ssid = "Wifi name";
+const char* password = "Wifi password";
 
 const char* API_URL =
+<<<<<<< HEAD:Software/indoor-aq-r4.ino
 "https://dev-ctop.iiit.ac.in/api/nodes/create-cin/15";
 
 const char* TOKEN =
 "2f5d786104198a54f5016ce12286dc96";
+=======
+"api url";
+
+const char* TOKEN =
+"bearer token";
+>>>>>>> b11f7af47ea0e2bef44e7ed97fcff0fadf5861ac:Software/indoor-aq.ino
 
 const char* CO2_FIELD = "co\xE2\x82\x82";
 
@@ -70,7 +77,7 @@ void readAHT10();
 void readNoise();
 
 int readCO2PWM();
-bool readPASIN01();
+bool readSDS011();
 
 int calculateAQI(float pm25);
 String getAQICategory(int aqi);
@@ -141,7 +148,7 @@ void loop()
     lastSample = millis();
 
     readAHT10();
-    readPASIN01();
+    readSDS011();
     readNoise();
 
     int co2ppm = readCO2PWM();
@@ -376,58 +383,57 @@ int readCO2PWM()
 // SDS011
 // =====================================================
 
-bool readPASIN01()
+bool readSDS011()
 {
-  // Read PM2.5 and PM10 command
-  uint8_t cmd[9] =
+  while (sdsSerial.available() >= 10)
   {
-    0xAA,   // Header
-    0x02,   // Read PM2.5 & PM10
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0xBB    // Tail
-  };
+    if (sdsSerial.read() != 0xAA)
+      continue;
 
-  // Send request
-  sdsSerial.write(cmd, 9);
+    uint8_t buf[10];
 
-  delay(100);
+    buf[0] = 0xAA;
 
-  if (sdsSerial.available() < 9)
-    return false;
+    for (int i = 1; i < 10; i++)
+    {
+      unsigned long start =
+        millis();
 
-  uint8_t resp[9];
+      while (!sdsSerial.available())
+      {
+        if (millis() - start > 100)
+          return false;
+      }
 
-  for (int i = 0; i < 9; i++)
-  {
-    resp[i] = sdsSerial.read();
+      buf[i] =
+        sdsSerial.read();
+    }
+
+    if (buf[1] != 0xC0)
+      continue;
+
+    uint8_t checksum = 0;
+
+    for (int i = 2; i <= 7; i++)
+    {
+      checksum += buf[i];
+    }
+
+    if (checksum != buf[8])
+      return false;
+
+    pm25 =
+      (((uint16_t)buf[3] << 8)
+      | buf[2]) / 10.0;
+
+    pm10 =
+      (((uint16_t)buf[5] << 8)
+      | buf[4]) / 10.0;
+
+    return true;
   }
 
-  if (resp[0] != 0xAA || resp[8] != 0xBB)
-    return false;
-
-  // Prana format:
-  // Byte3 = PM10 High
-  // Byte4 = PM10 Low
-  // Byte5 = PM2.5 High
-  // Byte6 = PM2.5 Low
-
-  uint16_t pm10Raw =
-      ((uint16_t)resp[2] << 8) |
-       resp[3];
-
-  uint16_t pm25Raw =
-      ((uint16_t)resp[4] << 8) |
-       resp[5];
-
-  pm10 = pm10Raw;
-  pm25 = pm25Raw;
-
-  return true;
+  return false;
 }
 
 // =====================================================
