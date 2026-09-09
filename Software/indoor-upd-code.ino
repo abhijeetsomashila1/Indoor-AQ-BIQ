@@ -6,6 +6,8 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <esp_wifi.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SH110X.h>
 
 // =====================================================
 // PINS
@@ -18,6 +20,10 @@
 #define NOISE_PIN     34
 #define BUTTON_PIN    0            // Boot button (active LOW)
 #define STATUS_LED    2            // Built‑in LED (GPIO2)
+#define OLED_ADDR     0x3C
+#define OLED_WIDTH    128
+#define OLED_HEIGHT   64
+#define OLED_RESET    -1
 
 // =====================================================
 // DEFAULTS (overridden by Preferences)
@@ -39,6 +45,7 @@ Adafruit_AHTX0 aht;
 HardwareSerial sdsSerial(2);
 Preferences preferences;
 WebServer webServer(80);
+Adafruit_SH1106G oled(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 
 // =====================================================
 // CONFIGURABLE PARAMETERS (loaded from Preferences)
@@ -62,6 +69,10 @@ int   co2ppm      = -1;
 bool  ahtOk       = false;
 unsigned long lastSample = 0;
 unsigned long lastDebugPrint = 0;   // for 10‑sec debug logs
+unsigned long lastOLEDUpdate = 0;
+uint8_t oledScreen = 0;
+bool oledOk = false;
+const unsigned long OLED_SCREEN_INTERVAL = 5000UL;
 
 // =====================================================
 // SYSTEM STATE
@@ -95,12 +106,89 @@ int  calculateAQI(float pm25);
 String getAQICategory(int aqi);
 void postData(float temp, float hum, float pm25, float pm10, int co2, float noise, int aqi);
 void printSensorSummary(const char* prefix);
+void initOLED();
+void updateOLED();
+
+void initOLED() {
+  if (!oled.begin(OLED_ADDR, true)) {
+    Serial.println("[OLED] NOT DETECTED");
+    return;
+  }
+
+  oledOk = true;
+  oled.clearDisplay();
+  oled.setTextColor(SH110X_WHITE);
+  oled.setTextSize(2);
+  oled.setCursor(0, 0);
+  oled.println("Indoor Air Quality");
+  oled.display();
+  Serial.println("[OLED] OK");
+}
+
+void updateOLED() {
+  if (!oledOk || millis() - lastOLEDUpdate < OLED_SCREEN_INTERVAL) return;
+
+  lastOLEDUpdate = millis();
+  oled.clearDisplay();
+  oled.setTextColor(SH110X_WHITE);
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+
+  switch (oledScreen) {
+    case 0:
+      oled.println("PM2.5");
+      oled.setTextSize(2);
+      oled.setCursor(0, 24);
+      oled.print(pm25, 1);
+      oled.println(" ug/m3");
+      break;
+    case 1:
+      oled.println("PM10");
+      oled.setTextSize(2);
+      oled.setCursor(0, 24);
+      oled.print(pm10, 1);
+      oled.println(" ug/m3");
+      break;
+    case 2:
+      oled.println("CO2");
+      oled.setTextSize(2);
+      oled.setCursor(0, 24);
+      oled.print(co2ppm);
+      oled.println(" ppm");
+      break;
+    case 3:
+      oled.println("Temperature");
+      oled.setTextSize(2);
+      oled.setCursor(0, 24);
+      oled.print(temperature, 1);
+      oled.println(" C");
+      break;
+    case 4:
+      oled.println("Humidity");
+      oled.setTextSize(2);
+      oled.setCursor(0, 24);
+      oled.print(humidity, 1);
+      oled.println(" %");
+      break;
+    default:
+      int aqi = pm25 >= 0.0f ? calculateAQI(pm25) : -1;
+      oled.println("AQI");
+      oled.setTextSize(2);
+      oled.setCursor(0, 24);
+      oled.print(aqi);
+      break;
+  }
+
+  oled.display();
+  oledScreen = (oledScreen + 1) % 6;
+}
 
 // =====================================================
 // SENSOR INITIALISATION
 // =====================================================
 void initSensors() {
   Wire.begin(AHT_SDA, AHT_SCL);
+  initOLED();
   if ((ahtOk = aht.begin())) {
     Serial.println("AHT10 OK");
   } else {
@@ -232,6 +320,8 @@ void loop() {
       postData(temperature, humidity, pm25, pm10, co2ppm, noiseDBA, aqi);
     }
   }
+
+  updateOLED();
 
   // Small delay to prevent watchdog
   delay(10);
