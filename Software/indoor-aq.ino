@@ -12,10 +12,10 @@ const char* ssid = "SCRC-WIFI";
 const char* password = "SCRC@IIITH";
 
 const char* API_URL =
-"https://dev-ctop.iiit.ac.in/api/nodes/create-cin/15";
+"https://dev-ctop.iiit.ac.in/api/nodes/create-cin/16";
 
 const char* TOKEN =
-"2f5d786104198a54f5016ce12286dc96";
+"cab2ddd427101e6e551f6727885fe13a";
 
 const char* CO2_FIELD = "co\xE2\x82\x82";
 
@@ -70,7 +70,7 @@ void readAHT10();
 void readNoise();
 
 int readCO2PWM();
-bool readPASIN01();
+bool readSDS011();
 
 int calculateAQI(float pm25);
 String getAQICategory(int aqi);
@@ -105,11 +105,11 @@ void setup()
 
   if (aht.begin())
   {
-    Serial.println("[AHT10] OK");
+    Serial.println("AHT10 OK");
   }
   else
   {
-    Serial.println("[AHT10] ERROR: not detected");
+    Serial.println("AHT10 NOT DETECTED");
   }
 
   sdsSerial.begin(
@@ -141,7 +141,7 @@ void loop()
     lastSample = millis();
 
     readAHT10();
-    readPASIN01();
+    readSDS011();
     readNoise();
 
     int co2ppm = readCO2PWM();
@@ -190,11 +190,11 @@ void loop()
     Serial.print("AQI         : ");
     Serial.println(aqi);
 
-    // if (aqi >= 0)
-    // {
-    //   Serial.print("Category    : ");
-    //   Serial.println(getAQICategory(aqi));
-    // }
+    if (aqi >= 0)
+    {
+      Serial.print("Category    : ");
+      Serial.println(getAQICategory(aqi));
+    }
 
     Serial.println("================================");
 
@@ -269,13 +269,13 @@ void postData(
 
   DynamicJsonDocument jsonDoc(512);
 
-  jsonDoc["noise"] = noise;
-  jsonDoc["aqi"] = aqi;
-  jsonDoc["pm10"] = pm10;
-  jsonDoc["pm2.5"] = pm25;
   jsonDoc["temperature"] = temperature;
+  jsonDoc["pm2.5"] = pm25;
+  jsonDoc["pm10"] = pm10;
   jsonDoc[CO2_FIELD] = co2;
+  jsonDoc["noise"] = noise;
   jsonDoc["humidity"] = humidity;
+  jsonDoc["aqi"] = aqi;
 
   String requestBody;
 
@@ -322,18 +322,6 @@ void readAHT10()
 
   humidity =
     hum.relative_humidity;
-
-  if (isnan(temperature) || isnan(humidity))
-  {
-    Serial.println("[AHT10] ERROR: invalid reading");
-    return;
-  }
-
-  Serial.print("[AHT10] temperature=");
-  Serial.print(temperature, 2);
-  Serial.print(" C, humidity=");
-  Serial.print(humidity, 2);
-  Serial.println(" %");
 }
 
 // =====================================================
@@ -369,105 +357,76 @@ int readCO2PWM()
     );
 
   if (highTime == 0)
-  {
-    Serial.println("[Prana CO2] ERROR: PWM timeout");
     return -1;
-  }
 
   float highMs =
     highTime / 1000.0;
 
   if (highMs < 2 ||
       highMs > 1002)
-  {
-    Serial.print("[Prana CO2] ERROR: invalid pulse=");
-    Serial.print(highMs, 2);
-    Serial.println(" ms");
     return -1;
-  }
 
-  int co2ppm =
+  return
     5000.0 *
     (highMs - 2.0) /
     1000.0;
-
-  Serial.print("[Prana CO2] pulse=");
-  Serial.print(highMs, 2);
-  Serial.print(" ms, co2=");
-  Serial.print(co2ppm);
-  Serial.println(" ppm");
-
-  return co2ppm;
 }
 
 // =====================================================
 // SDS011
 // =====================================================
 
-bool readPASIN01()
+bool readSDS011()
 {
-  // Read PM2.5 and PM10 command
-  uint8_t cmd[9] =
+  while (sdsSerial.available() >= 10)
   {
-    0xAA,   // Header
-    0x02,   // Read PM2.5 & PM10
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0xBB    // Tail
-  };
+    if (sdsSerial.read() != 0xAA)
+      continue;
 
-  // Send request
-  sdsSerial.write(cmd, 9);
+    uint8_t buf[10];
 
-  delay(100);
+    buf[0] = 0xAA;
 
-  if (sdsSerial.available() < 9)
-  {
-    Serial.println("[Prana PM] ERROR: response timeout");
-    return false;
+    for (int i = 1; i < 10; i++)
+    {
+      unsigned long start =
+        millis();
+
+      while (!sdsSerial.available())
+      {
+        if (millis() - start > 100)
+          return false;
+      }
+
+      buf[i] =
+        sdsSerial.read();
+    }
+
+    if (buf[1] != 0xC0)
+      continue;
+
+    uint8_t checksum = 0;
+
+    for (int i = 2; i <= 7; i++)
+    {
+      checksum += buf[i];
+    }
+
+    if (checksum != buf[8])
+      return false;
+
+    pm25 =
+      (((uint16_t)buf[3] << 8)
+      | buf[2]) / 10.0;
+
+    pm10 =
+      (((uint16_t)buf[5] << 8)
+      | buf[4]) / 10.0;
+
+    return true;
   }
 
-  uint8_t resp[9];
-
-  for (int i = 0; i < 9; i++)
-  {
-    resp[i] = sdsSerial.read();
-  }
-
-  if (resp[0] != 0xAA || resp[8] != 0xBB)
-  {
-    Serial.println("[Prana PM] ERROR: invalid frame");
-    return false;
-  }
-
-  // Prana format:
-  // Byte3 = PM10 High
-  // Byte4 = PM10 Low
-  // Byte5 = PM2.5 High
-  // Byte6 = PM2.5 Low
-
-  uint16_t pm10Raw =
-      ((uint16_t)resp[2] << 8) |
-       resp[3];
-
-  uint16_t pm25Raw =
-      ((uint16_t)resp[4] << 8) |
-       resp[5];
-
-  pm10 = pm10Raw;
-  pm25 = pm25Raw;
-
-  Serial.print("[Prana PM] PM2.5=");
-  Serial.print(pm25, 0);
-  Serial.print(" ug/m3, PM10=");
-  Serial.print(pm10, 0);
-  Serial.println(" ug/m3");
-
-  return true;
+  return false;
 }
 
 // =====================================================
