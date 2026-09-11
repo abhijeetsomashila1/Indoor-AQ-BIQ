@@ -234,30 +234,62 @@ void logToSD(
   int aqi
 )
 {
+  unsigned long timestamp = millis() / 1000;
+  String row = String(timestamp) + "," +
+               String(temperature, 1) + "," +
+               String(humidity, 1) + "," +
+               String(pm25, 1) + "," +
+               String(pm10, 1) + "," +
+               String(co2) + "," +
+               String(noise, 1) + "," +
+               String(aqi);
+
   File logFile = SD.open(LOG_FILE, FILE_APPEND);
 
   if (!logFile)
   {
-    Serial.println("Unable to open SD log file");
+    Serial.println("SD DEBUG: open for append FAILED");
     return;
   }
 
-  logFile.print(millis() / 1000);
-  logFile.print(",");
-  logFile.print(temperature, 1);
-  logFile.print(",");
-  logFile.print(humidity, 1);
-  logFile.print(",");
-  logFile.print(pm25, 1);
-  logFile.print(",");
-  logFile.print(pm10, 1);
-  logFile.print(",");
-  logFile.print(co2);
-  logFile.print(",");
-  logFile.print(noise, 1);
-  logFile.print(",");
-  logFile.println(aqi);
+  size_t sizeBefore = logFile.size();
+  logFile.println(row);
+  logFile.flush();
+  size_t sizeAfter = logFile.size();
   logFile.close();
+
+  if (sizeAfter <= sizeBefore)
+  {
+    Serial.println("SD DEBUG: write FAILED");
+    return;
+  }
+
+  File verifyFile = SD.open(LOG_FILE, FILE_READ);
+
+  if (!verifyFile)
+  {
+    Serial.println("SD DEBUG: read-back open FAILED");
+    return;
+  }
+
+  verifyFile.seek(sizeBefore);
+  String savedRow = verifyFile.readStringUntil('\n');
+  savedRow.trim();
+  verifyFile.close();
+
+  if (savedRow == row)
+  {
+    Serial.print("SD DEBUG: data written and verified, bytes added = ");
+    Serial.println(sizeAfter - sizeBefore);
+    Serial.print("SD DEBUG: saved row = ");
+    Serial.println(savedRow);
+  }
+  else
+  {
+    Serial.println("SD DEBUG: read-back verification FAILED");
+    Serial.print("SD DEBUG: read row = ");
+    Serial.println(savedRow);
+  }
 }
 
 // =====================================================
