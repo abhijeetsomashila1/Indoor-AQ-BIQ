@@ -25,10 +25,10 @@ Earlier sketches in `Software/` are retained as historical variants.
 The OLED is configured for 128x64 pixels with no reset pin (`-1`).
 
 | Sensor  | Power Pin |
-| --- | --- | --- |
-| AHT10 temperature and humidity | 3.3V|
-| SH1106 OLED |3.3V|
-| SDS011 PM2.5 and PM10 | 5V|
+| --- | --- |
+| AHT10 temperature and humidity | 3.3V |
+| SH1106 OLED | 3.3V |
+| SDS011 PM2.5 and PM10 | 5V |
 | Prana CO2 sensor | 5V |
 | DF Robot Noise sensor | 3.3V |
 
