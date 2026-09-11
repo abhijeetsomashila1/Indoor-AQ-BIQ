@@ -17,12 +17,21 @@ Earlier sketches in `Software/` are retained as historical variants.
 | AHT10 temperature and humidity | I2C | SDA 22, SCL 21 |
 | SH1106 OLED | I2C, address `0x3C` | SDA 22, SCL 21 |
 | SDS011 PM2.5 and PM10 | Hardware serial 2 | RX 17, TX 16 |
-| CO2 sensor | PWM | GPIO 27 |
-| Noise sensor | Analog input | GPIO 34 |
+| Prana CO2 sensor | PWM | GPIO 27 |
+| DF Robot Noise sensor | Analog input | GPIO 34 |
 | Configuration button | Active-low input | GPIO 0 |
 | Status LED | Digital output | GPIO 2 |
 
 The OLED is configured for 128x64 pixels with no reset pin (`-1`).
+
+| Sensor  | Power Pin |
+| --- | --- | --- |
+| AHT10 temperature and humidity | 3.3V|
+| SH1106 OLED |3.3V|
+| SDS011 PM2.5 and PM10 | 5V|
+| Prana CO2 sensor | 5V |
+| DF Robot Noise sensor | 3.3V |
+
 
 ### Required libraries
 
