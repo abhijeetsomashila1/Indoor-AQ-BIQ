@@ -1,7 +1,10 @@
 #include <SPI.h>
 #include <SD.h>
 #include <Wire.h>
+#include <WiFi.h>
+#include <WiFiManager.h>
 #include <Adafruit_AHTX0.h>
+#include <RTClib.h>
 
 // =====================================================
 // SD CARD
@@ -11,6 +14,9 @@
 
 const char* LOG_FILE = "/aq_log.csv";
 const unsigned long SAMPLE_INTERVAL = 60UL * 1000UL;
+
+#define WIFI_RESET_PIN 0
+#define WIFI_RESET_HOLD_TIME 5000
 
 // =====================================================
 // PINS
@@ -32,60 +38,61 @@ const unsigned long SAMPLE_INTERVAL = 60UL * 1000UL;
 
 // =====================================================
 // OBJECTS
+  WiFi.mode(WIFI_AP_STA);
+
 // =====================================================
 
 Adafruit_AHTX0 aht;
 HardwareSerial sdsSerial(2);
-
+RTC_DS3231 rtc;
 // =====================================================
-// VARIABLES
-// =====================================================
-
-float temperature = 0;
+  else
 float humidity = 0;
-
+    Serial.println("Configuration portal timed out");
 float pm25 = -1;
 float pm10 = -1;
-
+  // Keep the node hotspot visible after WiFiManager exits the portal.
+  WiFi.mode(WIFI_AP_STA);
+  if (WiFi.softAP("AQ-Node", "aq123"))
 float noiseDBA = 0;
-
-unsigned long lastSample = 0;
-
-// =====================================================
-// FUNCTION PROTOTYPES
-// =====================================================
-
-void readAHT10();
-void readNoise();
-
-int readCO2PWM();
-bool readSDS011();
-
-int calculateAQI(float pm25);
-String getAQICategory(int aqi);
-void logToSD(
+    Serial.println("AQ-Node hotspot started");
+    Serial.print("Hotspot IP address: ");
+    Serial.println(WiFi.softAPIP());
   float temperature,
   float humidity,
   float pm25,
-  float pm10,
-  int co2,
-  float noise,
-  int aqi
-);
-
-// =====================================================
-// SETUP
+    Serial.println("AQ-Node hotspot FAILED");
 // =====================================================
 
-void setup()
-{
-  Serial.begin(115200);
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    Serial.println("WiFi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  }
   delay(1000);
 
   Serial.println();
   Serial.println("================================");
   Serial.println("AIR QUALITY NODE");
   Serial.println("================================");
+
+  resetWiFiIfRequested();
+  connectWiFi();
+
+  Wire.begin(AHT_SDA, AHT_SCL);
+
+  if (rtc.begin())
+  {
+    Serial.println("RTC OK");
+
+    // Uncomment once to set the DS3231 from the sketch build time, then comment again.
+    // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+  else
+  {
+    Serial.println("RTC NOT FOUND");
+  }
 
   SPI.begin(18, 19, 23, SD_CS);
 
@@ -110,8 +117,6 @@ void setup()
   {
     Serial.println("SD Card FAILED");
   }
-
-  Wire.begin(AHT_SDA, AHT_SCL);
 
   if (aht.begin())
   {
@@ -162,8 +167,13 @@ void loop()
       aqi = calculateAQI(pm25);
     }
 
+    String timestamp = formatDateTime(rtc.now());
+
     Serial.println();
     Serial.println("================================");
+
+    Serial.print("Timestamp   : ");
+    Serial.println(timestamp);
 
     Serial.print("Temperature : ");
     Serial.print(temperature);
@@ -221,6 +231,92 @@ void loop()
 }
 
 // =====================================================
+// WIFI CONFIGURATION
+// =====================================================
+
+void resetWiFiIfRequested()
+{
+  pinMode(WIFI_RESET_PIN, INPUT_PULLUP);
+
+  if (digitalRead(WIFI_RESET_PIN) != LOW)
+    return;
+
+  Serial.println("WiFi reset requested; hold GPIO0 LOW for 5 seconds");
+  unsigned long holdStart = millis();
+
+  while (digitalRead(WIFI_RESET_PIN) == LOW)
+  {
+    if (millis() - holdStart >= WIFI_RESET_HOLD_TIME)
+    {
+      WiFiManager wifiManager;
+      wifiManager.resetSettings();
+      Serial.println("WiFi reset complete");
+
+      Serial.println("Release GPIO0 to start the configuration portal");
+      while (digitalRead(WIFI_RESET_PIN) == LOW)
+      {
+        delay(10);
+      }
+
+      delay(1000);
+      ESP.restart();
+    }
+
+    delay(10);
+  }
+}
+
+void connectWiFi()
+{
+  WiFiManager wifiManager;
+  wifiManager.setConfigPortalTimeout(180);
+
+  Serial.println("Starting configuration portal");
+
+  if (wifiManager.startConfigPortal("AQ-Node", "aq123"))
+  {
+    Serial.println("WiFi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    return;
+  }
+
+  Serial.println("Configuration portal timed out");
+
+  if (WiFi.getMode() != WIFI_STA)
+  {
+    WiFi.mode(WIFI_STA);
+  }
+
+  if (wifiManager.getWiFiIsSaved())
+  {
+    Serial.println("Connecting to saved WiFi credentials...");
+    WiFi.begin();
+
+    unsigned long connectionStart = millis();
+
+    while (WiFi.status() != WL_CONNECTED &&
+           millis() - connectionStart < 30000)
+    {
+      delay(500);
+      Serial.print(".");
+    }
+
+    Serial.println();
+  }
+
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("WiFi connection failed; continuing without WiFi");
+    return;
+  }
+
+  Serial.println("WiFi connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+// =====================================================
 // SD CARD LOGGING
 // =====================================================
 
@@ -234,8 +330,9 @@ void logToSD(
   int aqi
 )
 {
-  unsigned long timestamp = millis() / 1000;
-  String row = String(timestamp) + "," +
+  DateTime now = rtc.now();
+  String timestamp = formatDateTime(now);
+  String row = timestamp + "," +
                String(temperature, 1) + "," +
                String(humidity, 1) + "," +
                String(pm25, 1) + "," +
@@ -290,6 +387,28 @@ void logToSD(
     Serial.print("SD DEBUG: read row = ");
     Serial.println(savedRow);
   }
+}
+
+// =====================================================
+// RTC
+// =====================================================
+
+String formatDateTime(const DateTime& dateTime)
+{
+  char timeText[20];
+  snprintf(
+    timeText,
+    sizeof(timeText),
+    "%04d-%02d-%02d %02d:%02d:%02d",
+    dateTime.year(),
+    dateTime.month(),
+    dateTime.day(),
+    dateTime.hour(),
+    dateTime.minute(),
+    dateTime.second()
+  );
+
+  return String(timeText);
 }
 
 // =====================================================
