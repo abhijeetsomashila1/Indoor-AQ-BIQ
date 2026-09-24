@@ -14,7 +14,8 @@
 #define AHT_SCL       21
 #define SDS_RX        17
 #define SDS_TX        16
-#define CO2_PWM_PIN   27
+#define CO2_RX        32
+#define CO2_TX        33
 #define NOISE_PIN     34
 #define BUTTON_PIN    0            // Boot button (active LOW)
 #define STATUS_LED    2            // Built‑in LED (GPIO2)
@@ -37,8 +38,14 @@ const char* AP_PASSWORD  = "12345678";
 // =====================================================
 Adafruit_AHTX0 aht;
 HardwareSerial sdsSerial(2);
+HardwareSerial CO2Serial(1);
 Preferences preferences;
 WebServer webServer(80);
+
+// =====================================================
+// CO2 SENSOR COMMAND
+// =====================================================
+const byte CO2_COMMAND[] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79};
 
 // =====================================================
 // CONFIGURABLE PARAMETERS (loaded from Preferences)
@@ -89,7 +96,7 @@ void setupWebRoutes();
 void initSensors();
 void readAHT10();
 void readNoise();
-int  readCO2PWM();
+bool readCO2(int &co2ppm);
 bool readSDS011();
 int  calculateAQI(float pm25);
 String getAQICategory(int aqi);
@@ -107,7 +114,7 @@ void initSensors() {
     Serial.println("AHT10 NOT DETECTED");
   }
   sdsSerial.begin(9600, SERIAL_8N1, SDS_RX, SDS_TX);
-  pinMode(CO2_PWM_PIN, INPUT);
+  CO2Serial.begin(9600, SERIAL_8N1, CO2_RX, CO2_TX);
   analogReadResolution(12);
   analogSetPinAttenuation(NOISE_PIN, ADC_11db);
   Serial.println("Sensors initialised.");
@@ -208,7 +215,7 @@ void loop() {
       if (ahtOk) readAHT10();
       readSDS011();
       readNoise();
-      co2ppm = readCO2PWM();
+      readCO2(co2ppm);
       printSensorSummary("[DEBUG]");
     }
 
@@ -220,7 +227,7 @@ void loop() {
       if (ahtOk) readAHT10();
       readSDS011();
       readNoise();
-      co2ppm = readCO2PWM();
+      readCO2(co2ppm);
 
       int aqi = -1;
       if (pm25 >= 0.0f) aqi = calculateAQI(pm25);
@@ -393,17 +400,14 @@ input { width: 100%; padding: 8px; box-sizing: border-box; }
     <input type="text" name="ssid" required>
     <label>Password</label>
     <input type="password" name="password">
-
     <h3>Cloud API</h3>
     <label>API URL</label>
     <input type="text" name="apiurl" placeholder="http://...">
     <label>Bearer Token</label>
     <input type="text" name="token" placeholder="your_token_here">
-
     <h3>Timing</h3>
     <label>Post Interval (seconds)</label>
     <input type="number" name="interval" placeholder="600" min="10">
-
     <button type="submit" class="btn">Save & Reboot</button>
 </form>
 <p id="status"></p>
@@ -509,12 +513,40 @@ void readNoise() {
   noiseDBA = noiseSum / NOISE_SAMPLES;
 }
 
-int readCO2PWM() {
-  unsigned long highTime = pulseIn(CO2_PWM_PIN, HIGH, 2000000UL);
-  if (highTime == 0) return -1;
-  float highMs = highTime / 1000.0f;
-  if (highMs < 2.0f || highMs > 1002.0f) return -1;
-  return (int)(5000.0f * (highMs - 2.0f) / 1000.0f);
+bool readCO2(int &co2ppm) {
+  while (CO2Serial.available()) CO2Serial.read();   // clear old data
+
+  CO2Serial.write(CO2_COMMAND, sizeof(CO2_COMMAND));
+  CO2Serial.flush();
+
+  byte r[9];
+  int i = 0;
+  unsigned long start = millis();
+  while (i < 9 && millis() - start < 3000) {
+    if (CO2Serial.available()) {
+      byte b = CO2Serial.read();
+      if (i == 0 && b != 0xFF) continue;   // wait for start byte
+      r[i++] = b;
+    }
+  }
+
+  // Print raw bytes (helps debugging)
+  Serial.print("Raw CO2: ");
+  for (int j = 0; j < i; j++) Serial.printf("%02X ", r[j]);
+  Serial.println();
+
+  if (i != 9 || r[1] != 0x86) return false;
+
+  byte sum = 0;
+  for (int j = 1; j <= 7; j++) sum += r[j];
+  byte check = 0xFF - sum + 1;
+  if (check != r[8]) {
+    Serial.println("CO2 Checksum mismatch");
+    return false;
+  }
+
+  co2ppm = (r[2] << 8) | r[3];
+  return true;
 }
 
 bool readSDS011() {

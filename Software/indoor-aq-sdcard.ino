@@ -5,6 +5,7 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <esp_wifi.h>
+#include <RTClib.h>
 #include <Adafruit_AHTX0.h>
 #include <time.h>
 
@@ -36,7 +37,7 @@ const char* AP_NAME     = "AQ-Node-Setup";
 const unsigned long LONG_PRESS_MS   = 10000UL;
 const unsigned long WIFI_TIMEOUT_MS = 30000UL;
 
-// NTP
+// NTP / Wi-Fi time sync (used once at boot to set the RTC)
 const char* NTP_SERVER      = "pool.ntp.org";
 const long  GMT_OFFSET_SEC  = 19800;   // IST (+5:30)
 const int   DAYLIGHT_OFFSET = 0;
@@ -45,6 +46,7 @@ const int   DAYLIGHT_OFFSET = 0;
 // OBJECTS
 // =====================================================
 Adafruit_AHTX0 aht;
+RTC_DS3231 rtc;
 HardwareSerial sdsSerial(2);
 Preferences    preferences;
 WebServer      webServer(80);
@@ -57,7 +59,7 @@ String wifi_password;
 
 bool provisioningMode = false;
 bool wifiReady        = false;
-bool timeSynced       = false;
+bool rtcAvailable     = false;
 
 float temperature = 0;
 float humidity    = 0;
@@ -75,9 +77,9 @@ bool          buttonHeld        = false;
 void loadWiFiConfig();
 void saveWiFiConfig(const String& ssid, const String& pass);
 void connectWiFi();
+bool syncRTCFromWiFi();
 void startProvisioningAP();
 void setupWebRoutes();
-void syncTime();
 String formatTimestamp();
 void updateWiFiLED();
 void updateStatusLED();
@@ -158,11 +160,29 @@ void setup() {
     return;
   }
 
-  // Sync time via NTP
-  syncTime();
+  // Init RTC
+  Wire.begin(AHT_SDA, AHT_SCL);
+  if (!rtc.begin()) {
+    rtcAvailable = false;
+    Serial.println("RTC NOT FOUND");
+  } else {
+    rtcAvailable = true;
+    Serial.println("RTC OK");
+
+    if (rtc.lostPower()) {
+      Serial.println("RTC LOST POWER");
+    }
+
+    DateTime now = rtc.now();
+    Serial.printf("RTC Date/Time before sync: %04d-%02d-%02d %02d:%02d:%02d\n",
+                  now.year(), now.month(), now.day(),
+                  now.hour(), now.minute(), now.second());
+
+    // Sync RTC from Wi-Fi/NTP every boot so the RTC starts from the correct time
+    syncRTCFromWiFi();
+  }
 
   // Init sensors
-  Wire.begin(AHT_SDA, AHT_SCL);
   if (aht.begin()) Serial.println("AHT10 OK");
   else             Serial.println("AHT10 NOT DETECTED");
 
@@ -317,49 +337,70 @@ void connectWiFi() {
 }
 
 // =====================================================
-// NTP TIME SYNC
+// Wi-Fi/NTP -> RTC sync
 // =====================================================
-void syncTime() {
-  Serial.println("Syncing time via NTP...");
+bool syncRTCFromWiFi() {
+  if (!rtcAvailable) {
+    Serial.println("RTC not available, skipping Wi-Fi time sync.");
+    return false;
+  }
+
+  Serial.println("Syncing RTC from Wi-Fi/NTP...");
   configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET, NTP_SERVER);
 
-  unsigned long start = millis();
-  while (time(nullptr) < 100000 && millis() - start < 15000) {
+  time_t nowEpoch = 0;
+  for (int i = 0; i < 20; i++) {
+    nowEpoch = time(nullptr);
+    if (nowEpoch > 100000) {
+      break;
+    }
     delay(250);
     Serial.print(".");
   }
   Serial.println();
 
-  if (time(nullptr) >= 100000) {
-    timeSynced = true;
-    Serial.println("Time synced: " + formatTimestamp());
-  } else {
-    Serial.println("NTP sync failed – timestamps will be relative.");
+  if (nowEpoch <= 100000) {
+    Serial.println("Wi-Fi/NTP time sync failed; keeping existing RTC time.");
+    return false;
   }
+
+  struct tm timeinfo;
+  localtime_r(&nowEpoch, &timeinfo);
+
+  rtc.adjust(DateTime(
+    timeinfo.tm_year + 1900,
+    timeinfo.tm_mon + 1,
+    timeinfo.tm_mday,
+    timeinfo.tm_hour,
+    timeinfo.tm_min,
+    timeinfo.tm_sec
+  ));
+
+  DateTime synced = rtc.now();
+  Serial.printf("RTC synced: %04d-%02d-%02d %02d:%02d:%02d\n",
+                synced.year(), synced.month(), synced.day(),
+                synced.hour(), synced.minute(), synced.second());
+  return true;
 }
 
 // =====================================================
 // TIMESTAMP
 // =====================================================
 String formatTimestamp() {
-  time_t now = time(nullptr);
-  if (now < 100000) {
-    char uptime[24];
-    snprintf(uptime, sizeof(uptime), "UPTIME_%lu_s", millis() / 1000);
-    return String(uptime);
+  if (!rtcAvailable) {
+    return "RTC_NOT_AVAILABLE";
   }
-  struct tm timeinfo;
-  localtime_r(&now, &timeinfo);
 
-  char buf[24];
+  DateTime now = rtc.now();
+  char buf[20];
   snprintf(buf, sizeof(buf),
            "%04d-%02d-%02d %02d:%02d:%02d",
-           timeinfo.tm_year + 1900,
-           timeinfo.tm_mon + 1,
-           timeinfo.tm_mday,
-           timeinfo.tm_hour,
-           timeinfo.tm_min,
-           timeinfo.tm_sec);
+           now.year(),
+           now.month(),
+           now.day(),
+           now.hour(),
+           now.minute(),
+           now.second());
   return String(buf);
 }
 
