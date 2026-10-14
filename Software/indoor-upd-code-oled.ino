@@ -10,6 +10,16 @@
 #include <Adafruit_SH110X.h>
 
 // =====================================================
+// CALIBRATION (Node 1)  ->  calibrated = m * raw + c
+// =====================================================
+const float m_pm2  = 1.4188f;
+const float c_pm2  = 2.8236f;
+const float m_pm10 = 1.0154f;
+const float c_pm10 = -1.69944f;
+const float m_co2  = 1.2774f;
+const float c_co2  = -197.248f;
+
+// =====================================================
 // PINS
 // =====================================================
 #define AHT_SDA       22
@@ -69,17 +79,16 @@ unsigned long post_interval_ms = DEFAULT_INTERVAL_SEC * 1000UL;
 // =====================================================
 float temperature = 0.0f;
 float humidity    = 0.0f;
-float pm25        = -1.0f;
-float pm10        = -1.0f;
+float pm25        = -1.0f;   // calibrated
+float pm10        = -1.0f;   // calibrated
 float noiseDBA    = 30.0f;
-int   co2ppm      = -1;
+int   co2ppm      = -1;      // calibrated
 bool  ahtOk       = false;
 unsigned long lastSample = 0;
 unsigned long lastDebugPrint = 0;   // for 10‑sec debug logs
 unsigned long lastOLEDUpdate = 0;
-uint8_t oledScreen = 0;
 bool oledOk = false;
-const unsigned long OLED_SCREEN_INTERVAL = 5000UL;
+const unsigned long OLED_SCREEN_INTERVAL = 1000UL;
 
 // =====================================================
 // SYSTEM STATE
@@ -123,11 +132,13 @@ void initOLED() {
   }
 
   oledOk = true;
+  lastOLEDUpdate = millis() - OLED_SCREEN_INTERVAL;
   oled.clearDisplay();
   oled.setTextColor(SH110X_WHITE);
-  oled.setTextSize(2);
+  oled.setTextSize(1);
   oled.setCursor(0, 0);
   oled.println("Indoor Air Quality");
+  oled.println("Starting...");
   oled.display();
   Serial.println("[OLED] OK");
 }
@@ -140,54 +151,24 @@ void updateOLED() {
   oled.setTextColor(SH110X_WHITE);
   oled.setTextSize(1);
   oled.setCursor(0, 0);
-
-  switch (oledScreen) {
-    case 0:
-      oled.println("PM2.5");
-      oled.setTextSize(2);
-      oled.setCursor(0, 24);
-      oled.print(pm25, 1);
-      oled.println(" ug/m3");
-      break;
-    case 1:
-      oled.println("PM10");
-      oled.setTextSize(2);
-      oled.setCursor(0, 24);
-      oled.print(pm10, 1);
-      oled.println(" ug/m3");
-      break;
-    case 2:
-      oled.println("CO2");
-      oled.setTextSize(2);
-      oled.setCursor(0, 24);
-      oled.print(co2ppm);
-      oled.println(" ppm");
-      break;
-    case 3:
-      oled.println("Temperature");
-      oled.setTextSize(2);
-      oled.setCursor(0, 24);
-      oled.print(temperature, 1);
-      oled.println(" C");
-      break;
-    case 4:
-      oled.println("Humidity");
-      oled.setTextSize(2);
-      oled.setCursor(0, 24);
-      oled.print(humidity, 1);
-      oled.println(" %");
-      break;
-    default:
-      int aqi = pm25 >= 0.0f ? calculateAQI(pm25) : -1;
-      oled.println("AQI");
-      oled.setTextSize(2);
-      oled.setCursor(0, 24);
-      oled.print(aqi);
-      break;
-  }
+  oled.println("Indoor Air Quality");
+  oled.print("PM2.5: ");
+  oled.print(pm25 >= 0.0f ? pm25 : 0.0f, 1);
+  oled.println(" ug/m3");
+  oled.print("PM10 : ");
+  oled.print(pm10 >= 0.0f ? pm10 : 0.0f, 1);
+  oled.println(" ug/m3");
+  oled.print("CO2  : ");
+  oled.print(co2ppm >= 0 ? co2ppm : 0);
+  oled.println(" ppm");
+  oled.print("Temp : ");
+  oled.print(temperature, 1);
+  oled.println(" C");
+  oled.print("Hum  : ");
+  oled.print(humidity, 1);
+  oled.println(" %");
 
   oled.display();
-  oledScreen = (oledScreen + 1) % 6;
 }
 
 // =====================================================
@@ -205,6 +186,7 @@ void initSensors() {
   CO2Serial.begin(9600, SERIAL_8N1, CO2_RX, CO2_TX);
   analogReadResolution(12);
   analogSetPinAttenuation(NOISE_PIN, ADC_11db);
+  lastDebugPrint = millis() - 10000UL;
   Serial.println("Sensors initialised.");
 }
 
@@ -226,6 +208,10 @@ void setup() {
   preferences.begin("aqconfig", false);
   loadConfig();
 
+  // Start the local sensors and OLED before Wi-Fi. The display must not
+  // depend on a network connection or provisioning state.
+  initSensors();
+
   // If no SSID saved, directly start AP mode
   if (wifi_ssid.isEmpty()) {
     Serial.println("No SSID saved. Starting configuration portal...");
@@ -243,8 +229,6 @@ void setup() {
     return;
   }
 
-  // Normal operation – init sensors
-  initSensors();
   Serial.println("Ready for normal operation.");
 }
 
@@ -286,6 +270,7 @@ void loop() {
       ledState = !ledState;
       digitalWrite(STATUS_LED, ledState);
     }
+    updateOLED();
     return;
   }
 
@@ -294,38 +279,24 @@ void loop() {
   // ------------------------------------------------
   handleWiFi();
 
-  // If Wi‑Fi is ready, handle sampling and debug
-  if (wifiReady) {
-    // --- Debug print every 10 seconds ---
-    if (millis() - lastDebugPrint >= 10000UL) {
-      lastDebugPrint = millis();
-      // Read sensors to get latest values
-      if (ahtOk) readAHT10();
-      readSDS011();
-      readNoise();
-      readCO2(co2ppm);
-      printSensorSummary("[DEBUG]");
-    }
+  // Sensor acquisition is local and must continue even if Wi-Fi is down.
+  if (millis() - lastDebugPrint >= 10000UL) {
+    lastDebugPrint = millis();
+    if (ahtOk) readAHT10();
+    readSDS011();
+    readNoise();
+    readCO2(co2ppm);
+    printSensorSummary("[DEBUG]");
+  }
 
-    // --- Regular posting at configured interval ---
-    if (millis() - lastSample >= post_interval_ms) {
-      lastSample = millis();
+  if (wifiReady && millis() - lastSample >= post_interval_ms) {
+    lastSample = millis();
 
-      // Read sensors (already read by debug, but we re‑read to ensure fresh data)
-      if (ahtOk) readAHT10();
-      readSDS011();
-      readNoise();
-      readCO2(co2ppm);
+    int aqi = -1;
+    if (pm25 >= 0.0f) aqi = calculateAQI(pm25);
 
-      int aqi = -1;
-      if (pm25 >= 0.0f) aqi = calculateAQI(pm25);
-
-      // Print summary without prefix (regular post)
-      printSensorSummary("");
-
-      // Post data
-      postData(temperature, humidity, pm25, pm10, co2ppm, noiseDBA, aqi);
-    }
+    printSensorSummary("");
+    postData(temperature, humidity, pm25, pm10, co2ppm, noiseDBA, aqi);
   }
 
   updateOLED();
@@ -638,7 +609,10 @@ bool readCO2(int &co2ppm) {
     return false;
   }
 
-  co2ppm = (r[2] << 8) | r[3];
+  int co2_raw = (r[2] << 8) | r[3];
+
+  // Calibration: y = m*x + c
+  co2ppm = (int)round((m_co2 * co2_raw) + c_co2);
   return true;
 }
 
@@ -664,8 +638,13 @@ bool readSDS011() {
   uint8_t checksum = 0;
   for (int i = 2; i <= 7; i++) checksum += buf[i];
   if (checksum != buf[8]) return false;
-  pm25 = (((uint16_t)buf[3] << 8) | buf[2]) / 10.0f;
-  pm10 = (((uint16_t)buf[5] << 8) | buf[4]) / 10.0f;
+
+  float pm25_raw = (((uint16_t)buf[3] << 8) | buf[2]) / 10.0f;
+  float pm10_raw = (((uint16_t)buf[5] << 8) | buf[4]) / 10.0f;
+
+  // Calibration: y = m*x + c
+  pm25 = (m_pm2  * pm25_raw) + c_pm2;
+  pm10 = (m_pm10 * pm10_raw) + c_pm10;
   return true;
 }
 
@@ -733,9 +712,9 @@ void postData(float temperature, float humidity, float pm25, float pm10,
   requestBody += "\"noise\":" + String(noiseRounded, 2) + ",";
   requestBody += "\"aqi\":" + String(aqi) + ",";
   requestBody += "\"pm10\":" + String(pm10Rounded, 2) + ",";
-  requestBody += "\"pm2.5\":" + String(pm25Rounded, 2) + ",";
-  requestBody += "\"temperature\":" + String(tempRounded, 2) + ",";
-  requestBody += "\"co₂\":" + String(co2) + ",";
+  requestBody += "\"pm2_5\":" + String(pm25Rounded, 2) + ",";
+  requestBody += "\"air_temperature\":" + String(tempRounded, 2) + ",";
+  requestBody += "\"co2\":" + String(co2) + ",";
   requestBody += "\"humidity\":" + String(humRounded, 2);
   requestBody += "}";
 
